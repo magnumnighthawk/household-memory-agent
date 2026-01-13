@@ -1,0 +1,23 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# SQLite database files
+household_memory.sqlite3
+household_memory.sqlite3-shm
+household_memory.sqlite3-wal
+
+# VS Code settings
+.vscode/
+
+# macOS system files
+.DS_Store
+
+# Python virtual environments
+venv/
+.env/
+
+# Misc
+*.log
+.idea/

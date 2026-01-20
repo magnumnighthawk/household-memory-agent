@@ -3,6 +3,11 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Distribution / packaging
+*.egg-info/
+dist/
+build/
+
 # SQLite database files
 household_memory.sqlite3
 household_memory.sqlite3-shm

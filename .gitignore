@@ -20,5 +20,6 @@ venv/
 
 # Misc
 *.log
-.idea/
+idea/
 .env
+COPILOT_INSTRUCTIONS.md

@@ -3,21 +3,32 @@ from __future__ import annotations
 import asyncio
 import os
 import json
-import sqlite3
 import uuid
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal
+from collections import defaultdict
 
 import aiosqlite
 import typer
 from pydantic import BaseModel, Field
 from rich import print as rprint
+from openai import OpenAI
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ----------------------------
 # Models
 # ----------------------------
 SourceType = Literal["manual", "web", "pdf", "email", "photo"]
+SearchMode = Literal["recall", "precision"]
+_STOPWORDS = {
+    "when", "was", "is", "are", "were", "the", "a", "an", "to", "for", "of",
+    "in", "on", "at", "and", "or", "we", "i", "you", "our", "my", "last",
+    "did", "do", "does", "done", "this", "that", "it", "from"
+}
 
 class MemoryItem(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -40,6 +51,10 @@ class Answer(BaseModel):
     confidence: Literal["low", "medium", "high"]
     citations: list[RetrievalHit]
     follow_up_to_store: list[str] = Field(default_factory=list)
+
+class QueryExpansion(BaseModel):
+    queries: list[str] = Field(default_factory=list, description="Alternative FTS queries (short, keywordy)")
+    keywords: list[str] = Field(default_factory=list, description="Important keywords/entities to include")
 
 # ----------------------------
 # Storage (SQLite + FTS5)
@@ -108,31 +123,40 @@ class MemoryStore:
             )
             await db.commit()
 
-    async def search(self, query: str, limit: int = 5) -> list[RetrievalHit]:
-        # Sanitize query for FTS5 MATCH (remove special characters)
-        import re
-        sanitized_query = re.sub(r"[^\w\s]", " ", query)
-        # bm25() gives lower=better, so we invert into rank for convenience
+    async def search(self, query: str, limit: int = 5, mode: SearchMode = "recall") -> list[RetrievalHit]:
+        fts_query = build_fts_query(query)
+
+        if mode == "precision":
+            # convert "a* OR b* OR c*" -> "a* AND b* AND c*"
+            fts_query = fts_query.replace(" OR ", " AND ")
+
         sql = """
         SELECT
-          f.id,
-          i.title,
-          i.created_at,
-          snippet(items_fts, 2, '[bold yellow]', '[/bold yellow]', '…', 25) AS snip,
-          bm25(items_fts) AS bm
+        f.id,
+        i.title,
+        i.created_at,
+        snippet(items_fts, 2, '[bold yellow]', '[/bold yellow]', '…', 25) AS snip,
+        bm25(items_fts) AS bm
         FROM items_fts f
         JOIN items i ON i.id = f.id
         WHERE items_fts MATCH ?
         ORDER BY bm ASC
         LIMIT ?;
         """
+
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
-            rows = await db.execute_fetchall(sql, (sanitized_query, limit))
+            cursor = await db.execute(sql, (fts_query, limit))
+            rows = await cursor.fetchall()
+
         hits: list[RetrievalHit] = []
         for r in rows:
             bm = float(r["bm"])
-            rank = 1.0 / (1.0 + max(bm, 0.0))
+
+            # Robust to positive or negative bm:
+            # lower magnitude => better, so use abs
+            rank = 1.0 / (1.0 + abs(bm))
+
             hits.append(
                 RetrievalHit(
                     item_id=r["id"],
@@ -142,13 +166,15 @@ class MemoryStore:
                     rank=rank,
                 )
             )
+
         return hits
     
     async def get_item(self, item_id: str) -> MemoryItem | None:
         sql = "SELECT * FROM items WHERE id = ?;"
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
-            row = await db.execute_fetchone(sql, (item_id,))
+            cursor = await db.execute(sql, (item_id,))
+            row = await cursor.fetchone()
         if row:
             return MemoryItem(
                 id=row["id"],
@@ -164,6 +190,42 @@ class MemoryStore:
 # ----------------------------
 # Grounded answering
 # ----------------------------
+def build_fts_query(raw: str) -> str:
+    """
+    Build an FTS5 MATCH query string that is:
+    - robust to punctuation
+    - biased toward recall (OR)
+    - improves matching via prefix search (token*)
+    """
+    # Keep alphanumerics, convert others to space
+    cleaned = re.sub(r"[^\w\s]", " ", raw.lower()).strip()
+    tokens = [t for t in cleaned.split() if t]
+
+    # Remove stopwords but keep numbers/model-ish tokens
+    kept: list[str] = []
+    for t in tokens:
+        if t in _STOPWORDS:
+            continue
+        kept.append(t)
+
+    # If everything got removed, fall back to original tokens
+    if not kept:
+        kept = tokens
+
+    # Prefix-expand "word" tokens (but not short ones or pure numbers)
+    def token_to_fts(t: str) -> str:
+        if t.isdigit():
+            return t
+        if len(t) <= 2:
+            return t
+        # FTS5 prefix search: token*
+        return f"{t}*"
+
+    fts_terms = [token_to_fts(t) for t in kept]
+
+    # OR query for recall
+    return " OR ".join(fts_terms)
+
 def evidence_is_sufficient(hits: list[RetrievalHit]) -> bool:
     if not hits:
         return False
@@ -173,9 +235,74 @@ def evidence_is_sufficient(hits: list[RetrievalHit]) -> bool:
     
     return False
 
-async def answer_question(store: MemoryStore, question: str) -> Answer:
-    hits = await store.search(question, limit=5)
+def merge_hits(hit_lists: list[list[RetrievalHit]], top_k: int = 5) -> list[RetrievalHit]:
+    best: dict[str, RetrievalHit] = {}
+    counts: defaultdict[str, int] = defaultdict(int)
+
+    for hits in hit_lists:
+        for h in hits:
+            counts[h.item_id] += 1
+            prev = best.get(h.item_id)
+            if prev is None or h.rank > prev.rank:
+                best[h.item_id] = h
+
+    merged = list(best.values())
+
+    # consensus bonus (small, bounded)
+    for h in merged:
+        c = counts[h.item_id]
+        bonus = min(0.10, 0.03 * (c - 1))
+        h.rank = min(0.999, h.rank + bonus)
+
+    merged.sort(key=lambda x: x.rank, reverse=True)
+    return merged[:top_k]
+
+async def expand_query_llm(question: str) -> QueryExpansion:
+    # If no key, degrade gracefully to “no expansion”
+    if not os.getenv("OPENAI_API_KEY"):
+        return QueryExpansion(queries=[], keywords=[])
+
+    client = OpenAI()
+
+    prompt = (
+        "You generate short search queries for a household memory database.\n"
+        "Return alternative keyword-style queries that could match stored notes.\n"
+        "Use synonyms and abbreviations; include likely entity words.\n"
+        "Keep each query short (2–6 tokens). Prefer stems like 'servic*' when useful.\n"
+        f"Question: {question}"
+    )
+
+    resp = client.chat.completions.parse(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "You are a search query expansion assistant."},
+            {"role": "user", "content": prompt}
+        ],
+        response_format=QueryExpansion,
+        temperature=0.3,
+    )
+
+    # Parse the response using the built-in Pydantic parser
+    return resp.choices[0].message.parsed
+
+async def retrieve(store: MemoryStore, question: str, limit: int = 5) -> list[RetrievalHit]:
+    base_hits = await store.search(question, limit=limit)
+    rprint(f"[cyan]DEBUG base_hits:[/cyan] {base_hits}")
     
+    expansion = await expand_query_llm(question)
+    rprint(f"[cyan]DEBUG expansion:[/cyan] {expansion}")
+    # Keep it bounded
+    expanded_queries = (expansion.queries or [])[:6]
+
+    hit_lists: list[list[RetrievalHit]] = [base_hits]
+    for q in expanded_queries:
+        hit_lists.append(await store.search(q, limit=limit))
+
+    return merge_hits(hit_lists, top_k=limit)
+
+async def answer_question(store: MemoryStore, question: str) -> Answer:
+    hits = await retrieve(store, question, limit=5)
+
     if not evidence_is_sufficient(hits):
         return Answer(
             answer="I don’t have enough grounded information in Household Memory to answer that yet.",
@@ -186,17 +313,14 @@ async def answer_question(store: MemoryStore, question: str) -> Answer:
                 "If it’s a service event, store the provider name and the service date.",
             ],
         )
-    
-    # Retrieval-only MVP answer: summarise based on snippets (safe-ish).
-    # v1.5: plug in an LLM but constrain it to only use retrieved content.
+
     bullet_citations = "\n".join(
         [f"- {h.title} ({h.created_at}): {h.snippet}" for h in hits[:3]]
     )
     return Answer(
         answer=(
             "Here’s what I found in Household Memory (grounded in stored notes):\n"
-            f"{bullet_citations}\n\n"
-            "If you want a single precise date/value answer, store the invoice/service note text explicitly."
+            f"{bullet_citations}\n"
         ),
         confidence="medium" if hits[0].rank < 0.55 else "high",
         citations=hits[:3],

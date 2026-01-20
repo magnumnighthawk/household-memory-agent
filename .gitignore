@@ -21,3 +21,4 @@ venv/
 # Misc
 *.log
 .idea/
+.env

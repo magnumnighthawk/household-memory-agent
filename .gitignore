@@ -13,6 +13,10 @@ household_memory.sqlite3
 household_memory.sqlite3-shm
 household_memory.sqlite3-wal
 
+# Data directory (contains SQLite DB in Docker setup)
+data/
+backups/
+
 # VS Code settings
 .vscode/
 

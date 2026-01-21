@@ -32,3 +32,4 @@ venv/
 idea/
 .env
 COPILOT_INSTRUCTIONS.md
+.github/

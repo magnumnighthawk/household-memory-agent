@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   memory-api:
     build: .
@@ -25,6 +23,28 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    networks:
+      - memory-network
+
+  memory-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.bot
+    container_name: memory-bot
+    environment:
+      # Telegram bot token (required)
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      # Memory API URL (uses Docker network service name)
+      - MEMORY_API_BASE_URL=http://memory-api:8088
+      # Logging level
+      - BOT_LOG_LEVEL=${BOT_LOG_LEVEL:-INFO}
+      # Allowed Telegram user IDs (comma-separated, optional but recommended)
+      # Get your ID by messaging the bot /start and checking logs
+      - BOT_ALLOW_USERS=${BOT_ALLOW_USERS:-}
+    depends_on:
+      memory-api:
+        condition: service_healthy
+    restart: unless-stopped
     networks:
       - memory-network
 

@@ -17,10 +17,13 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "fastapi>=0.109.0",
     "uvicorn[standard]>=0.27.0",
+    "python-telegram-bot>=21.0",
+    "httpx>=0.27.0",
 ]
 
 [project.scripts]
 memory = "memory_agent:app"
+memory-bot = "telegram_bot:main"
 
 [project.optional-dependencies]
 dev = [
@@ -29,4 +32,4 @@ dev = [
 ]
 
 [tool.setuptools]
-py-modules = ["memory_agent", "memory_api"]
+py-modules = ["memory_agent", "memory_api", "telegram_bot"]

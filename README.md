@@ -1,6 +1,11 @@
 # Household Memory Agent
 
-A privacy-focused command-line tool for storing and retrieving household-related notes, receipts, invoices, and service records. Uses a local SQLite database with FTS5 full-text search and optional LLM-powered query expansion for intelligent retrieval.
+A privacy-focused tool for storing and retrieving household-related notes, receipts, invoices, and service records. Uses a local SQLite database with FTS5 full-text search and optional LLM-powered query expansion for intelligent retrieval.
+
+**Access via:**
+- **Telegram Bot** — Natural chat interface (recommended for household adoption)
+- **REST API** — HTTP endpoints for integrations
+- **CLI** — Command-line interface for power users
 
 ## Features
 
@@ -11,8 +16,48 @@ A privacy-focused command-line tool for storing and retrieving household-related
 - **Source citations**: Every answer includes references to the source memories
 - **Multiple source types**: Support for manual entries, web, PDF, email, and photo sources
 - **Tagging system**: Organize memories with custom tags
+- **Telegram Bot**: Chat-based interface for easy household adoption
 
 ## Quick Start
+
+### Option 1: Telegram Bot (Recommended for Households)
+
+1. **Create a Telegram bot** via @BotFather (get your token)
+
+2. **Configure environment:**
+   ```sh
+   cp .env.example .env
+   # Edit .env and add your TELEGRAM_BOT_TOKEN
+   ```
+
+3. **Start with Docker Compose:**
+   ```sh
+   docker compose up -d --build
+   ```
+
+4. **Get your Telegram user ID:**
+   ```sh
+   docker compose logs -f memory-bot
+   # Message your bot /start, check logs for your user ID
+   ```
+
+5. **Secure the bot** by adding your user ID to `.env`:
+   ```env
+   BOT_ALLOW_USERS=12345678,98765432
+   ```
+
+6. **Restart:**
+   ```sh
+   docker compose restart memory-bot
+   ```
+
+**Usage:**
+- Send any message to save it as a memory
+- Start messages with `?` to search (e.g., `? when was boiler serviced`)
+
+See [Telegram Bot Setup Guide](idea/012-telegram-bot-setup.md) for details.
+
+### Option 2: CLI
 
 1. **Install dependencies:**
    ```sh
@@ -101,14 +146,22 @@ OPENAI_API_KEY=sk-...
 
 ## Requirements
 
-- Python 3.10 or higher
-- Dependencies (install via `pip install -e .`):
-  - aiosqlite >= 0.19.0
-  - typer >= 0.9.0
-  - pydantic >= 2.0.0
-  - rich >= 13.0.0
-  - openai >= 1.0.0
-  - python-dotenv >= 1.0.0
+- **For Docker (Telegram Bot + API):**
+  - Docker and Docker Compose
+  - Telegram bot token from @BotFather
+  - Optional: OpenAI API key
+
+- **For CLI:**
+  - Python 3.10 or higher
+  - Dependencies (install via `pip install -e .`):
+    - aiosqlite >= 0.19.0
+    - typer >= 0.9.0
+    - pydantic >= 2.0.0
+    - rich >= 13.0.0
+    - openai >= 1.0.0
+    - python-dotenv >= 1.0.0
+    - python-telegram-bot >= 21.0 (for bot)
+    - httpx >= 0.27.0 (for bot)
 
 ## How It Works
 
@@ -164,8 +217,28 @@ This is a **grounded** memory agent:
 - All data is stored locally in SQLite
 - No data is sent to external services except:
   - Query expansion requests to OpenAI API (optional, query text only)
+  - Telegram bot API (only for bot updates, no memory data sent)
 - Database file: `household_memory.sqlite3` (default location)
 - WAL files: `household_memory.sqlite3-wal` and `-shm` (temporary)
+
+## API Reference
+
+The REST API is available at `http://localhost:8088` (when using Docker).
+
+### Endpoints
+
+- `GET /health` — Health check
+- `POST /items` — Add a memory item
+- `GET /search?q=<query>&limit=5` — Search memories
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for API details.
+
+## Components
+
+- **[telegram_bot.py](telegram_bot.py)** — Telegram bot interface
+- **[memory_api.py](memory_api.py)** — REST API server
+- **[memory_agent.py](memory_agent.py)** — Core logic and CLI
+- **[docker-compose.yml](docker-compose.yml)** — Service orchestration
 
 ## Development
 
@@ -181,6 +254,10 @@ pytest
 
 ## Future Enhancements
 
+- [x] Telegram bot interface
+- [x] REST API
+- [x] Docker deployment
+- [ ] Photo/attachment support in Telegram
 - [ ] Email scraping and auto-ingestion
 - [ ] PDF/receipt OCR
 - [ ] Photo/image analysis

@@ -135,7 +135,7 @@ class MemoryStore:
         f.id,
         i.title,
         i.created_at,
-        snippet(items_fts, 2, '**', '**', '…', 25) AS snip,
+        snippet(items_fts, 2, '**', '**', '…', 50) AS snip,
         bm25(items_fts) AS bm
         FROM items_fts f
         JOIN items i ON i.id = f.id

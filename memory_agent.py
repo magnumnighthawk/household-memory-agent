@@ -135,7 +135,7 @@ class MemoryStore:
         f.id,
         i.title,
         i.created_at,
-        snippet(items_fts, 2, '[bold yellow]', '[/bold yellow]', '…', 25) AS snip,
+        snippet(items_fts, 2, '**', '**', '…', 25) AS snip,
         bm25(items_fts) AS bm
         FROM items_fts f
         JOIN items i ON i.id = f.id
@@ -287,10 +287,8 @@ async def expand_query_llm(question: str) -> QueryExpansion:
 
 async def retrieve(store: MemoryStore, question: str, limit: int = 5) -> list[RetrievalHit]:
     base_hits = await store.search(question, limit=limit)
-    rprint(f"[cyan]DEBUG base_hits:[/cyan] {base_hits}")
     
     expansion = await expand_query_llm(question)
-    rprint(f"[cyan]DEBUG expansion:[/cyan] {expansion}")
     # Keep it bounded
     expanded_queries = (expansion.queries or [])[:6]
 
@@ -315,7 +313,7 @@ async def answer_question(store: MemoryStore, question: str) -> Answer:
         )
 
     bullet_citations = "\n".join(
-        [f"- {h.title} ({h.created_at}): {h.snippet}" for h in hits[:3]]
+        [f"- {h.title} ({h.created_at[:10]}): {h.snippet}" for h in hits[:3]]
     )
     return Answer(
         answer=(
@@ -325,6 +323,32 @@ async def answer_question(store: MemoryStore, question: str) -> Answer:
         confidence="medium" if hits[0].rank < 0.55 else "high",
         citations=hits[:3],
     )
+
+# ----------------------------
+# CLI Formatting Helpers
+# ----------------------------
+def format_answer_cli(ans: Answer) -> str:
+    """Format an Answer object with rich formatting for CLI display."""
+    lines = [f"\n[bold]Answer[/bold] ({ans.confidence}):\n{ans.answer}\n"]
+    
+    if ans.citations:
+        lines.append("[bold]Citations[/bold]")
+        for c in ans.citations:
+            # Apply rich formatting to snippet (convert ** to rich tags)
+            snippet_rich = c.snippet.replace("**", "[bold yellow]", 1)
+            snippet_rich = snippet_rich.replace("**", "[/bold yellow]", 1)
+            # Handle multiple highlights
+            while "**" in snippet_rich:
+                snippet_rich = snippet_rich.replace("**", "[bold yellow]", 1)
+                snippet_rich = snippet_rich.replace("**", "[/bold yellow]", 1)
+            lines.append(f"- {c.title} • {c.created_at} • rank={c.rank:.2f}\n  {snippet_rich}")
+    
+    if ans.follow_up_to_store:
+        lines.append("\n[bold]To improve memory[/bold]")
+        for f in ans.follow_up_to_store:
+            lines.append(f"- {f}")
+    
+    return "\n".join(lines)
 
 # ----------------------------
 # CLI
@@ -374,15 +398,7 @@ def ask(
         return await answer_question(store, question)
 
     ans = asyncio.run(_run())
-    rprint(f"\n[bold]Answer[/bold] ({ans.confidence}):\n{ans.answer}\n")
-    if ans.citations:
-        rprint("[bold]Citations[/bold]")
-        for c in ans.citations:
-            rprint(f"- {c.title} • {c.created_at} • rank={c.rank:.2f}\n  {c.snippet}")
-    if ans.follow_up_to_store:
-        rprint("\n[bold]To improve memory[/bold]")
-        for f in ans.follow_up_to_store:
-            rprint(f"- {f}")
+    rprint(format_answer_cli(ans))
 
 if __name__ == "__main__":
     app()

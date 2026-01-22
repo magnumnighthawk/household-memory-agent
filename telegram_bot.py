@@ -115,7 +115,7 @@ def format_hits(hits: list[RetrievalHit]) -> str:
         lines.append(
             f"<b>{i}. {escape_html(h.title)}</b>\n"
             f"<i>📅 {escape_html(h.created_at[:10])} • rank {h.rank:.2f}</i>\n"
-            f"{escape_html(h.snippet)}\n"
+            f"{format_snippet_html(h.snippet)}\n"
         )
     return "\n".join(lines)
 
@@ -126,6 +126,22 @@ def escape_html(s: str) -> str:
          .replace("<", "&lt;")
          .replace(">", "&gt;")
     )
+
+def format_snippet_html(snippet: str) -> str:
+    """Convert snippet with ** markers to HTML bold tags for Telegram."""
+    # First escape HTML special characters
+    escaped = escape_html(snippet)
+    
+    # Convert ** markers to <b> tags
+    parts = escaped.split("**")
+    result = []
+    for i, part in enumerate(parts):
+        if i % 2 == 1:  # Odd indices are highlighted text
+            result.append(f"<b>{part}</b>")
+        else:
+            result.append(part)
+    
+    return "".join(result)
 
 # ----------------------------
 # API Client Functions
